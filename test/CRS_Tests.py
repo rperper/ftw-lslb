@@ -12,9 +12,9 @@ def test_crs(test, logchecker_obj):
         runner.run_stage(stage, logchecker_obj)
 
 
-class FooLogChecker(logchecker.LogChecker):
+class LSLogChecker(logchecker.LogChecker):
     def __init__(self, config):
-        super(FooLogChecker, self).__init__()
+        super(LSLogChecker, self).__init__()
         self.log_location = self.find_log_location(config)
         self.backwards_reader = BackwardsReader(self.log_location)
         print('Log location: %s'%self.log_location)
@@ -98,9 +98,9 @@ class FooLogChecker(logchecker.LogChecker):
 
 @pytest.fixture(scope='session')
 def logchecker_obj(config):
-    return FooLogChecker(config)
+    return LSLogChecker(config)
 
-# Adapted from http://code.activestate.com/recipes/120686-read-a-text-file-backwards/
+# Adapted from https://stackoverflow.com/questions/2301789/how-to-read-a-file-in-reverse-order
 class BackwardsReader:
   def __init__(self, file, blksize=4096):
     """initialize the internal structures"""
@@ -108,25 +108,33 @@ class BackwardsReader:
     # how big of a block to read from the file...
     self.blksize = blksize
     self.f = open(file, 'rb')
- 
     self.reset()
 
   def readline(self):
-    while len(self.data) == 1 and ((self.blkcount * self.blksize) < self.size):
-      self.blkcount = self.blkcount + 1
-      line = self.data[0]
-      try:
-        self.f.seek(-self.blksize * self.blkcount, os.SEEK_END) # read from end of file
-        self.data = (self.f.read(self.blksize) + line).split(b'\n')
-      except IOError:  # can't seek before the beginning of the file
-        self.f.seek(0)
-        self.data = (self.f.read(self.size - (self.blksize * (self.blkcount-1))) + line).split(b'\n')
-
-    if len(self.data) == 0:
-      return ""
-
-    line = self.data.pop()
-    return line + b'\n'
+      while self.remaining_size > 0:
+          offset = min(self.size, offset + self.blksize)
+          self.f.seek(self.size - offset)
+          buffer = self.f.read(min(self.remaining_size, self.blksize)).decode('cp1252')
+          self.remaining_size -= self.blksize
+          lines = buffer.split('\n')
+          # The first line of the buffer is probably not a complete line so
+          # we'll save it and append it to the last line of the next buffer
+          # we read
+          if segment is not None:
+              # If the previous chunk starts right from the beginning of line
+              # do not concat the segment to the last line of new chunk.
+              # Instead, yield the segment first
+              if buffer[-1] != '\n':
+                  lines[-1] += segment
+              else:
+                  yield segment
+          segment = lines[0]
+          for index in range(len(lines) - 1, 0, -1):
+              if lines[index]:
+                  yield lines[index]
+      # Don't yield None if the file was empty
+      if segment is not None:
+          yield segment
 
   def readlines(self):
       line = self.readline()
@@ -136,15 +144,6 @@ class BackwardsReader:
         
   def reset(self):
     # get the file size
-    self.size = os.stat(self.file)[6]
-    # how many blocks we've read
-    self.blkcount = 1
-    # if the file is smaller than the blocksize, read a block,
-    # otherwise, read the whole thing...
-    if self.size > self.blksize:
-      self.f.seek(-self.blksize * self.blkcount, 2) # read from end of file
-    self.data = self.f.read(self.blksize).split(b'\n')
-    # strip the last item if it's empty...  a byproduct of the last line having
-    # a newline at the end of it
-    if not self.data[-1]:
-      self.data.pop()
+    self.f.seek(0, os.SEEK_END)
+    self.size = self.remaining_size = self.f.tell()
+    self.segment = None
