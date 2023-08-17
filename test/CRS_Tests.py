@@ -108,7 +108,7 @@ class BackwardsReader:
     # how big of a block to read from the file...
     self.blksize = blksize
     self.f = open(file, 'rb')
-
+ 
     self.reset()
 
   def readline(self):
