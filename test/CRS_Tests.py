@@ -17,7 +17,6 @@ class LSLogChecker(logchecker.LogChecker):
         super(LSLogChecker, self).__init__()
         self.log_location = self.find_log_location(config)
         self.backwards_reader = BackwardsReader(self.log_location)
-        print('Log location: %s'%self.log_location)
         self.start_marker = None
         self.end_marker = None
 
@@ -33,22 +32,26 @@ class LSLogChecker(logchecker.LogChecker):
         def try_once():
             # self.mark_and_flush_log(stage_id)
             self.backwards_reader.reset()
-            return self.backwards_reader.readline() or b''
+            return self.backwards_reader.readline() 
             
-        line = try_once()
-        #print('find_marker entry line: %s'%line)
+        self.gen = try_once()
         # while not (header_bytes in line and stage_id_bytes in line):
         #     line = try_once()
-        return line
+        return next(self.gen)
 
     def get_logs(self):
         logs = []
         # At this point we're already at the end marker
-        for line in self.backwards_reader.readlines():
+        found = False
+        for line in self.backwards_reader.readline():
             if line == self.start_marker:
+                found = True
                 break
 
-            logs.append(line.decode('cp1252'))
+            logs.append(line)
+        if not found:
+            print('Marker %s not found, fatal!' % self.start_marker)
+            exit(1)
         return logs
 
     def mark_and_flush_log(self, header_value):
@@ -57,7 +60,6 @@ class LSLogChecker(logchecker.LogChecker):
         generate an entry in the log. We can use this to flush the log and to
         mark the output so we know where our test output is.
         """
-        print('mark_and_flush_log, header_value: %s'%header_value)
         http.HttpUA().send_request(Input(
             headers={
                 'Host': 'localhost',
@@ -108,9 +110,13 @@ class BackwardsReader:
     # how big of a block to read from the file...
     self.blksize = blksize
     self.f = open(file, 'rb')
+    self.last_size = 0
     self.reset()
 
+  # Note that this is a generator and needs to be referenced in a generator type construct
   def readline(self):
+      offset = 0
+      segment = None
       while self.remaining_size > 0:
           offset = min(self.size, offset + self.blksize)
           self.f.seek(self.size - offset)
@@ -136,14 +142,10 @@ class BackwardsReader:
       if segment is not None:
           yield segment
 
-  def readlines(self):
-      line = self.readline()
-      while line:
-          yield line
-          line = self.readline()
-        
   def reset(self):
-    # get the file size
     self.f.seek(0, os.SEEK_END)
     self.size = self.remaining_size = self.f.tell()
-    self.segment = None
+    if self.last_size > self.size:
+        print('Size went down from %d to %d, assume file switch' % (self.last_size, self.size))
+        exit(1)
+
